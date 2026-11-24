@@ -346,6 +346,12 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
   function isSpecialSecure(text) {
     return /Unterkunft|\bUK\b|Seetangwald|\bSTW\b/.test(text);
   }
+  function ago(ts) {
+    var min = Math.floor((Date.now() - ts) / 60000);
+    if (min < 1) return "gerade eben";
+    if (min < 60) return "vor " + min + " Min.";
+    return "vor " + Math.floor(min / 60) + " Std. " + (min % 60) + " Min.";
+  }
   function clock(ts) {
     return new Date(ts).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) + " Uhr";
   }
@@ -445,7 +451,7 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
 
     var lastRun = load(KEY_RUN, null);
     var pvpRun = load(KEY_PVP_RUN, null);
-    document.getElementById("lastRun").textContent = lastRun ? "Zuletzt ausgewertet um " + clock(lastRun) : "";
+    document.getElementById("lastRun").textContent = lastRun ? "Positionen von " + clock(lastRun) + " (" + ago(lastRun) + ")" : "";
     document.getElementById("pvpRun").textContent = pvpRun ? "PvP-Stand von " + clock(pvpRun) : "Achtung: Aktuell keine PVP-Daten hinterlegt";
 
     if (!current.length) return;
@@ -639,7 +645,6 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
     if (!syncToken()) return;
     if (syncBusy) { syncAgain = true; return; }
     syncBusy = true;
-    setSyncStatus("Synchronisiere …");
     var gistId;
     ensureGist().then(function (id) {
       gistId = id;
@@ -658,7 +663,7 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
       }
       return gh("PATCH", "/gists/" + gistId, { files: gistFiles(JSON.stringify(merged)) });
     }).then(function () {
-      setSyncStatus("Synchronisiert um " + clock(Date.now()));
+      setSyncStatus("");
     }).catch(function (e) {
       if (e.status === 401) {
         removeKey(KEY_TOKEN);
