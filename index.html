@@ -194,13 +194,13 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
   margin: 1.25rem 0;
 }
 section { margin-top: 2rem; }
-.summary { display: flex; flex-wrap: wrap; gap: 1.5rem 2rem; margin: 1.75rem 0 .5rem; }
-.summary div { font-size: .95rem; color: var(--muted); max-width: 11rem; }
+.summary { display: flex; flex-wrap: wrap; gap: .75rem 1.75rem; margin: 1.25rem 0 .5rem; }
+.summary div { font-size: .85rem; color: var(--muted); display: flex; align-items: baseline; gap: .4rem; }
 .summary strong {
   display: block;
   font-family: "Shippori Mincho", Georgia, serif;
   font-weight: 800;
-  font-size: 2.2rem;
+  font-size: 1.5rem;
   line-height: 1.1;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
@@ -221,10 +221,11 @@ section { margin-top: 2rem; }
 ul.players { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
 ul.players li {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: .25rem 1rem;
-  align-items: center;
-  padding: .6rem .75rem;
+  grid-template-columns: minmax(0, 1fr) 6.5rem 8.5rem;
+  gap: 0 .9rem;
+  align-items: baseline;
+  padding: .28rem .6rem;
+  font-size: .95rem;
   border-bottom: 1px solid var(--line);
 }
 li.pvp { background: var(--pvp-bg); color: var(--pvp-ink); }
@@ -238,9 +239,12 @@ li.calm.stale { box-shadow: inset 5px 0 0 var(--calm-strong); }
   li.pvp.stale { box-shadow: inset 10px 0 0 var(--pvp-strong); }
   li.calm.stale { box-shadow: inset 10px 0 0 var(--calm-strong); }
 }
-.name { font-weight: 700; overflow-wrap: anywhere; }
-.coords { font-variant-numeric: tabular-nums; }
-.meta { grid-column: 1 / -1; font-size: .85rem; display: flex; flex-wrap: wrap; gap: .25rem .75rem; align-items: center; }
+.name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.coords { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.meta { font-size: .82rem; white-space: nowrap; opacity: .85; text-align: right; }
+@media (max-width: 480px) {
+  ul.players li { grid-template-columns: minmax(0, 1fr) 4.5rem 7.5rem; gap: 0 .5rem; }
+}
 li.safe .name { font-weight: 400; }
 li.safe .meta { color: var(--safe-ink); }
 details { margin-top: 1.5rem; }
@@ -430,6 +434,13 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
     schedulePush();
   }
 
+  function shortAge(ms) {
+    var min = Math.floor(ms / 60000);
+    if (min < 1) return "neu";
+    if (min < 60) return min + " Min.";
+    return Math.floor(min / 60) + " Std. " + (min % 60) + " Min.";
+  }
+
   function formatAge(ms) {
     var min = Math.floor(ms / 60000);
     if (min < 1) return "Gerade erst dort angekommen.";
@@ -465,6 +476,8 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
       if (p.special || isSecure(p.x, p.y)) safe.push(item); else unsafe.push(item);
     });
     unsafe.sort(function (a, b) {
+      var sa = a.age >= STALE_MS, sb = b.age >= STALE_MS;
+      if (sa !== sb) return sa ? -1 : 1;
       if (a.pvp !== b.pvp) return a.pvp ? -1 : 1;
       return b.age - a.age;
     });
@@ -473,17 +486,6 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
     var pvpCount = unsafe.filter(function (i) { return i.pvp; }).length;
     var staleCount = unsafe.filter(function (i) { return i.age >= STALE_MS; }).length;
 
-    var summary = el("div", "summary");
-    [["Unsicher mit aktivem PvP", pvpCount, "s-pvp"],
-     ["Unsicher ohne PvP", unsafe.length - pvpCount, "s-calm"],
-     ["Davon 10 Min. oder länger am selben Ort", staleCount, ""],
-     ["Auf sicheren Feldern", safe.length, ""]].forEach(function (s) {
-      var d = el("div", s[2]);
-      d.appendChild(el("strong", "", String(s[1])));
-      d.appendChild(document.createTextNode(s[0]));
-      summary.appendChild(d);
-    });
-    results.appendChild(summary);
 
     var sec = el("section");
     sec.appendChild(el("h2", "", "Unsichere Felder"));
@@ -500,6 +502,18 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
     }
     results.appendChild(sec);
 
+    var summary = el("div", "summary");
+    [["Unsicher mit aktivem PvP", pvpCount, "s-pvp"],
+     ["Unsicher ohne PvP", unsafe.length - pvpCount, "s-calm"],
+     ["Davon 10 Min. oder länger am selben Ort", staleCount, ""],
+     ["Auf sicheren Feldern", safe.length, ""]].forEach(function (s) {
+      var d = el("div", s[2]);
+      d.appendChild(el("strong", "", String(s[1])));
+      d.appendChild(document.createTextNode(s[0]));
+      summary.appendChild(d);
+    });
+    results.appendChild(summary);
+
     if (safe.length) {
       var det = el("details");
       det.appendChild(el("summary", "", "Sichere Felder anzeigen (" + safe.length + ")"));
@@ -514,20 +528,22 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
     var p = item.p;
     var cls = isSafe ? "safe" : (item.pvp ? "pvp" : "calm") + (item.age >= STALE_MS ? " stale" : "");
     var li = el("li", cls);
-    li.appendChild(el("span", "name", p.name));
-    li.appendChild(el("span", "coords", "X: " + p.x + "  Y: " + p.y));
+    var nameEl = el("span", "name", p.name);
+    nameEl.title = p.name;
+    li.appendChild(nameEl);
     var meta = el("span", "meta");
 
     if (isSafe) {
-      meta.appendChild(el("span", "", p.special ? "Unterkunft oder Seetangwald." : "Sicheres Feld."));
+      meta.textContent = p.special ? "Unterkunft/STW" : "";
     } else {
       var pvpText = item.pvpKnown
         ? (item.pvp ? "PvP aktiv" : "PvP deaktiviert") + " (Stand " + clock(item.pvpAt) + ")."
         : "PvP unbekannt, als deaktiviert gewertet.";
-      meta.appendChild(el("span", "", pvpText));
-      meta.appendChild(el("span", "", formatAge(item.age)));
+      meta.textContent = shortAge(item.age);
+      li.title = pvpText + " " + formatAge(item.age);
     }
     li.appendChild(meta);
+    li.appendChild(el("span", "coords", "X: " + p.x + "  Y: " + p.y));
     return li;
   }
 
