@@ -185,6 +185,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
   outline-offset: 2px;
 }
 .row-actions { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin-top: .75rem; align-items: center; }
+main > .row-actions:first-child { margin-top: 0; }
 .hint { color: var(--muted); font-size: .9rem; }
 .notice {
   background: var(--warn-bg);
@@ -266,22 +267,10 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
 </header>
 <main>
   <div class="row-actions">
-    <button id="pasteRun" type="button" class="big">Kopiernudel</button>
     <span class="hint" id="lastRun"></span>
     <span class="hint" id="pvpRun"></span>
     <span class="hint" id="syncStatus"></span>
   </div>
-  <p class="hint" id="pasteHint">Alternativ einfach irgendwo auf der Seite Strg+V drücken.</p>
-
-  <details id="manual">
-    <summary>Manuell einfügen</summary>
-    <label for="input" class="hint">Kopierter Text einer der beiden Listen</label>
-    <textarea id="input" placeholder="Lebende Wesen an der Oberfläche dieser Welt: …  oder  Folgende Personen sind jetzt in dieser Welt unterwegs: …"></textarea>
-    <div class="row-actions">
-      <button id="evaluate" type="button">Liste auswerten</button>
-    </div>
-  </details>
-
   <div id="results"></div>
 
   <details id="syncSettings">
@@ -396,7 +385,6 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
   }
 
   function evaluate(text) {
-    if (typeof text !== "string") text = document.getElementById("input").value;
     var parsed = parse(text);
     var list = parsed.list;
     if (!list.length) {
@@ -747,11 +735,6 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
     sync(true);
   });
 
-  document.getElementById("evaluate").addEventListener("click", function () { evaluate(); });
-  document.getElementById("input").addEventListener("paste", function () {
-    setTimeout(function () { evaluate(); }, 0);
-  });
-
   // Strg+V irgendwo auf der Seite (außer in Eingabefeldern) wertet direkt aus
   document.addEventListener("paste", function (e) {
     var t = e.target;
@@ -759,22 +742,9 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
     var text = e.clipboardData ? e.clipboardData.getData("text") : "";
     if (!text) return;
     e.preventDefault();
-    document.getElementById("input").value = text;
     evaluate(text);
   });
 
-  function showPasteFallback() {
-    document.getElementById("pasteHint").textContent =
-      "Der Browser erlaubt hier keinen direkten Zugriff auf die Zwischenablage. Drück stattdessen einfach Strg+V auf dieser Seite.";
-  }
-
-  document.getElementById("pasteRun").addEventListener("click", function () {
-    if (!navigator.clipboard || !navigator.clipboard.readText) { showPasteFallback(); return; }
-    navigator.clipboard.readText().then(function (text) {
-      document.getElementById("input").value = text;
-      evaluate(text);
-    }).catch(showPasteFallback);
-  });
 
   render();
   updateSyncUI();
