@@ -159,7 +159,28 @@ button {
 button.quiet { background: transparent; color: inherit; border-color: currentColor; }
 button.small { padding: .15rem .5rem; font-size: .85rem; font-weight: 400; }
 button.big { font-size: 1.1rem; padding: .8rem 1.5rem; }
-button:focus-visible, textarea:focus-visible, summary:focus-visible {
+input.field {
+  width: 100%;
+  padding: .6rem .75rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 14px/1.4 ui-monospace, Menlo, Consolas, monospace;
+}
+.setup-steps { padding-left: 1.25rem; margin: .5rem 0 1rem; }
+.setup-steps li { margin-bottom: .35rem; }
+.footer-link { margin-top: 2.5rem; }
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--muted);
+  font-weight: 400;
+  font-size: .85rem;
+  text-decoration: underline;
+}
+button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
@@ -244,6 +265,7 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
     <button id="pasteRun" type="button" class="big">Aus Zwischenablage auswerten</button>
     <span class="hint" id="lastRun"></span>
     <span class="hint" id="pvpRun"></span>
+    <span class="hint" id="syncStatus"></span>
   </div>
   <p class="hint" id="pasteHint">Alternativ einfach irgendwo auf der Seite Strg+V drücken.</p>
 
@@ -258,11 +280,39 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
 
   <div id="results"></div>
 
+  <details id="syncSettings">
+    <summary>Geräte synchronisieren</summary>
+    <div id="syncSetup">
+      <p class="hint">Speichert PvP-Stände und Zeitpunkte in einem privaten GitHub Gist, damit alle Geräte denselben Stand haben. Der Schlüssel bleibt nur auf diesem Gerät gespeichert und steht nirgends im Code.</p>
+      <ol class="setup-steps hint">
+        <li>Auf GitHub unter Settings, Developer settings, Personal access tokens, Tokens (classic) einen neuen Schlüssel erstellen.</li>
+        <li>Nur das Häkchen bei „gist“ setzen, sonst nichts.</li>
+        <li>Den Schlüssel hier einfügen. Auf jedem weiteren Gerät denselben Schlüssel eintragen.</li>
+      </ol>
+      <label for="tokenInput" class="hint">GitHub-Schlüssel</label>
+      <input id="tokenInput" class="field" type="password" autocomplete="off" spellcheck="false">
+      <div class="row-actions">
+        <button id="connectSync" type="button">Verbinden</button>
+      </div>
+    </div>
+    <div id="syncConnected" hidden>
+      <p class="hint">Dieses Gerät ist verbunden. Der Stand wird nach jedem Auswerten, beim Zurückkehren zur Seite und jede Minute abgeglichen.</p>
+      <div class="row-actions">
+        <button id="syncNow" type="button">Jetzt synchronisieren</button>
+        <button id="disconnectSync" type="button" class="quiet">Verbindung auf diesem Gerät trennen</button>
+      </div>
+    </div>
+  </details>
+
   <details>
     <summary>Gespeicherte Daten löschen</summary>
-    <p class="hint">Löscht die gemerkten Zeitpunkte und PvP-Stände aller Spieler.</p>
+    <p class="hint">Löscht die gemerkten Zeitpunkte und PvP-Stände aller Spieler, bei aktiver Synchronisierung auf allen Geräten.</p>
     <button id="resetHistory" type="button" class="quiet">Verläufe und PvP-Stände löschen</button>
   </details>
+
+  <p class="footer-link" id="syncFooter" hidden>
+    <button type="button" id="showSync" class="link">Synchronisierung verwalten</button>
+  </p>
 </main>
 
 <script>
@@ -377,6 +427,7 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
       save(KEY_PVP_RUN, now);
     }
     render();
+    schedulePush();
   }
 
   function formatAge(ms) {
@@ -480,6 +531,194 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
     return li;
   }
 
+  // ---------- Synchronisierung über ein privates GitHub Gist ----------
+  var KEY_TOKEN = "poscheck-gh-token";
+  var KEY_GIST = "poscheck-gist-id";
+  var GIST_FILE = "positions-check.json";
+  var API = "https://api.github.com";
+  var syncBusy = false, syncAgain = false, pushTimer = null;
+
+  function removeKey(key) { try { localStorage.removeItem(key); } catch (e) {} }
+  function syncToken() { return load(KEY_TOKEN, null); }
+
+  function emptyState() {
+    return { players: {}, pvp: {}, current: [], lastRun: null, pvpRun: null };
+  }
+  function localState() {
+    return { players: players, pvp: pvp, current: current, lastRun: load(KEY_RUN, null), pvpRun: load(KEY_PVP_RUN, null) };
+  }
+  function applyState(st) {
+    players = st.players; pvp = st.pvp; current = st.current;
+    save(KEY_PLAYERS, players); save(KEY_PVP, pvp); save(KEY_LAST, current);
+    save(KEY_RUN, st.lastRun); save(KEY_PVP_RUN, st.pvpRun);
+  }
+
+  // Führt zwei Stände zusammen: pro Spieler gilt jeweils der neuere Stand
+  function mergeStates(a, b) {
+    var now = Date.now();
+    var ap = a.players || {}, bp = b.players || {}, av = a.pvp || {}, bv = b.pvp || {};
+    var out = emptyState();
+    Object.keys(ap).concat(Object.keys(bp)).sort().forEach(function (n) {
+      if (out.players[n]) return;
+      var x = ap[n], y = bp[n], r;
+      if (!x) r = y;
+      else if (!y) r = x;
+      else if (x.loc === y.loc) r = { loc: x.loc, since: Math.min(x.since, y.since), seen: Math.max(x.seen, y.seen) };
+      else r = x.seen >= y.seen ? x : y;
+      if (now - r.seen <= FORGET_MS) out.players[n] = r;
+    });
+    Object.keys(av).concat(Object.keys(bv)).sort().forEach(function (n) {
+      if (out.pvp[n]) return;
+      var x = av[n], y = bv[n];
+      out.pvp[n] = !x ? y : !y ? x : (x.at >= y.at ? x : y);
+    });
+    var aRun = a.lastRun || 0, bRun = b.lastRun || 0;
+    out.current = (aRun >= bRun ? a.current : b.current) || [];
+    out.lastRun = Math.max(aRun, bRun) || null;
+    out.pvpRun = Math.max(a.pvpRun || 0, b.pvpRun || 0) || null;
+    return out;
+  }
+
+  function gh(method, path, body) {
+    var opts = {
+      method: method,
+      cache: "no-store",
+      headers: {
+        "Authorization": "Bearer " + syncToken(),
+        "Accept": "application/vnd.github+json"
+      }
+    };
+    if (body) {
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(API + path, opts).then(function (r) {
+      if (!r.ok) { var e = new Error("HTTP " + r.status); e.status = r.status; throw e; }
+      return r.json();
+    });
+  }
+
+  function gistFiles(content) {
+    var files = {};
+    files[GIST_FILE] = { content: content };
+    return files;
+  }
+
+  function findGist(page) {
+    return gh("GET", "/gists?per_page=100&page=" + page).then(function (list) {
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].files && list[i].files[GIST_FILE]) return list[i].id;
+      }
+      return list.length === 100 && page < 5 ? findGist(page + 1) : null;
+    });
+  }
+
+  function ensureGist() {
+    var id = load(KEY_GIST, null);
+    if (id) return Promise.resolve(id);
+    return findGist(1).then(function (found) {
+      if (found) return found;
+      return gh("POST", "/gists", {
+        description: "Positions-Check Daten",
+        public: false,
+        files: gistFiles(JSON.stringify(localState()))
+      }).then(function (g) { return g.id; });
+    }).then(function (gistId) { save(KEY_GIST, gistId); return gistId; });
+  }
+
+  function setSyncStatus(text) {
+    document.getElementById("syncStatus").textContent = text;
+  }
+
+  function updateSyncUI() {
+    var on = !!syncToken();
+    // Verbunden: Bereich ausblenden, nur der kleine Link unten bleibt
+    document.getElementById("syncSettings").hidden = on;
+    document.getElementById("syncFooter").hidden = !on;
+    document.getElementById("syncSetup").hidden = on;
+    document.getElementById("syncConnected").hidden = !on;
+    if (!on) setSyncStatus("");
+  }
+
+  // overwrite = true schreibt den lokalen Stand ohne Zusammenführen ins Gist
+  function sync(overwrite) {
+    if (!syncToken()) return;
+    if (syncBusy) { syncAgain = true; return; }
+    syncBusy = true;
+    setSyncStatus("Synchronisiere …");
+    var gistId;
+    ensureGist().then(function (id) {
+      gistId = id;
+      return overwrite ? null : gh("GET", "/gists/" + id);
+    }).then(function (g) {
+      var merged, remote;
+      if (overwrite) {
+        merged = localState();
+      } else {
+        var f = g.files && g.files[GIST_FILE];
+        try { remote = f && f.content ? JSON.parse(f.content) : emptyState(); } catch (e) { remote = emptyState(); }
+        merged = mergeStates(localState(), remote);
+        applyState(merged);
+        render();
+        if (JSON.stringify(merged) === JSON.stringify(mergeStates(emptyState(), remote))) return null;
+      }
+      return gh("PATCH", "/gists/" + gistId, { files: gistFiles(JSON.stringify(merged)) });
+    }).then(function () {
+      setSyncStatus("Synchronisiert um " + clock(Date.now()));
+    }).catch(function (e) {
+      if (e.status === 401) {
+        removeKey(KEY_TOKEN);
+        removeKey(KEY_GIST);
+        updateSyncUI();
+        setSyncStatus("GitHub hat den Schlüssel abgelehnt. Bitte einen gültigen Schlüssel mit Gist-Berechtigung eintragen.");
+      } else if (e.status === 404) {
+        removeKey(KEY_GIST);
+        setSyncStatus("Das Gist wurde nicht gefunden. Beim nächsten Synchronisieren wird ein neues angelegt.");
+      } else if (e.status === 403 || e.status === 422) {
+        setSyncStatus("GitHub hat die Anfrage abgelehnt. Prüfe, ob der Schlüssel die Berechtigung „gist“ hat.");
+      } else if (e.status) {
+        setSyncStatus("Synchronisierung fehlgeschlagen (Fehler " + e.status + "). Neuer Versuch in einer Minute.");
+      } else {
+        setSyncStatus("Keine Verbindung zu GitHub. In der Ansicht auf claude.ai ist die Synchronisierung nicht möglich, auf deiner eigenen Seite schon.");
+      }
+    }).then(function () {
+      syncBusy = false;
+      if (syncAgain) { syncAgain = false; sync(); }
+    });
+  }
+
+  function schedulePush() {
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(function () { sync(); }, 1500);
+  }
+
+  document.getElementById("connectSync").addEventListener("click", function () {
+    var token = document.getElementById("tokenInput").value.trim();
+    if (!token) { setSyncStatus("Bitte zuerst den GitHub-Schlüssel eintragen."); return; }
+    save(KEY_TOKEN, token);
+    removeKey(KEY_GIST);
+    document.getElementById("tokenInput").value = "";
+    updateSyncUI();
+    sync();
+  });
+  document.getElementById("syncNow").addEventListener("click", function () { sync(); });
+  document.getElementById("disconnectSync").addEventListener("click", function () {
+    removeKey(KEY_TOKEN);
+    removeKey(KEY_GIST);
+    updateSyncUI();
+  });
+  document.getElementById("showSync").addEventListener("click", function () {
+    var box = document.getElementById("syncSettings");
+    box.hidden = false;
+    box.open = true;
+    document.getElementById("syncFooter").hidden = true;
+    box.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) sync();
+  });
+  setInterval(function () { if (!document.hidden) sync(); }, 60000);
+
   document.getElementById("resetHistory").addEventListener("click", function () {
     players = {};
     pvp = {};
@@ -487,8 +726,10 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
     save(KEY_PLAYERS, players);
     save(KEY_PVP, pvp);
     save(KEY_LAST, current);
+    save(KEY_RUN, null);
     save(KEY_PVP_RUN, null);
     render();
+    sync(true);
   });
 
   document.getElementById("evaluate").addEventListener("click", function () { evaluate(); });
@@ -521,6 +762,8 @@ summary { cursor: pointer; font-weight: 700; color: var(--accent); }
   });
 
   render();
+  updateSyncUI();
+  sync();
   setInterval(render, 30000);
 })();
 </script>
